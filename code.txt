@@ -1,0 +1,187 @@
+#include <Arduino.h>
+
+// Channel addresses for the 14 sensors
+byte channel_adress_table[14][4] = {
+  { 0, 0, 0, 0 },  { 0, 0, 0, 1 },  { 0, 0, 1, 0 },  { 0, 0, 1, 1 },
+  { 0, 1, 0, 0 },  { 0, 1, 0, 1 },  { 0, 1, 1, 0 },  { 0, 1, 1, 1 },
+  { 1, 0, 0, 0 },  { 1, 0, 0, 1 },  { 1, 0, 1, 0 },  { 1, 0, 1, 1 },
+  { 1, 1, 0, 0 },  { 1, 1, 0, 1 }
+};
+
+// MUX variables
+#define A 23
+#define B 22
+#define C 21
+#define D 19
+#define sensor 34
+
+// Motor driver pins (TB12FNG)
+#define PWMA 32   // Left motor PWM
+#define PWMB 13   // Right motor PWM
+#define AIN1 25   // Left motor direction
+#define AIN2 33   // Left motor direction
+#define BIN1 14   // Right motor direction
+#define BIN2 27   // Right motor direction
+#define STBY 26   // Motor driver standby
+
+// PID constants
+double Kp = 3;   // Proportional gain
+double Ki = 0;   // Integral gain
+double Kd = 1;   // Derivative gain
+
+// PID variables
+float lastError = 0;
+float integral = 0;
+const float integralLimit = 1000.0; // Anti-windup limit for the integral term
+
+// Base motor speed
+int baseSpeed = 120;
+
+void setup() {
+  Serial.begin(115200); // Initialize serial communication for debugging
+  Serial.println("System initialized.");
+
+  // Set up MUX pins
+  pinMode(A, OUTPUT);
+  pinMode(B, OUTPUT);
+  pinMode(C, OUTPUT);
+  pinMode(D, OUTPUT);
+  pinMode(sensor, INPUT);
+
+  // Set up motor driver pins
+  pinMode(PWMA, OUTPUT);
+  pinMode(PWMB, OUTPUT);
+  pinMode(AIN1, OUTPUT);
+  pinMode(AIN2, OUTPUT);
+  pinMode(BIN1, OUTPUT);
+  pinMode(BIN2, OUTPUT);
+  pinMode(STBY, OUTPUT);
+
+  // Enable motor driver
+  digitalWrite(STBY, HIGH);
+}
+
+void loop() {
+  // Line following logic
+  int position = readLine();
+
+  if (position == -1) { // No sensors detected a line
+    setMotorSpeeds(0, 0); // Stop the motors
+    return;
+  } else if (position == -2) { // All sensors are over 4000
+    setMotorSpeeds(0, 0);
+    return;
+  }
+
+  int error = position - 6500; // Center the line position (6500 is the mid-point)
+  error = map(error, -6500, 6500,-255,255);
+
+  // Compute PID values
+  float proportional = error;
+  integral += error;
+  
+  // Anti-windup: Clamp integral to prevent excessive growth
+  integral = constrain(integral, -integralLimit, integralLimit);
+
+  float derivative = error - lastError;
+  float correction = (Kp * proportional) + (Ki * integral) + (Kd * derivative);
+  lastError = error;
+
+  // Adjust motor speeds
+  int leftSpeed = baseSpeed + correction;
+  int rightSpeed = baseSpeed - correction;
+
+  // Set motor speeds, including reversing if needed
+  setMotorSpeeds(leftSpeed, rightSpeed);
+
+  delay(10);
+}
+
+int readLine() {
+  static unsigned long noLineStart = 0; // Track when no line was first detected
+  int sums = 0;
+  int active = 0;
+  int over4000Count = 0;
+
+  // Center sensor indices for prioritization
+  const int centerStart = 5; // Assuming 5 to 8 are the center sensors
+  const int centerEnd = 8;
+
+  for (int i = 0; i < 14; i++) {
+    // Set MUX channel address
+    digitalWrite(D, channel_adress_table[i][0]);
+    digitalWrite(C, channel_adress_table[i][1]);
+    digitalWrite(B, channel_adress_table[i][2]);
+    digitalWrite(A, channel_adress_table[i][3]);
+
+    // Read sensor value
+    int sens = analogRead(sensor);
+    if (sens > 4000) {
+      over4000Count++; // Count sensors with values over 4000
+    }
+    sens = (sens > 4000) ? 1 : 0; // Active-low logic
+
+    // Weighted sum calculation
+    sums += sens * i * 1000;
+    active += sens;
+  }
+
+  // Handle more than two active sensors
+  if (over4000Count > 2) {
+    sums = 0;
+    active = 0;
+
+    for (int i = centerStart; i <= centerEnd; i++) {
+      // Set MUX channel address
+      digitalWrite(D, channel_adress_table[i][0]);
+      digitalWrite(C, channel_adress_table[i][1]);
+      digitalWrite(B, channel_adress_table[i][2]);
+      digitalWrite(A, channel_adress_table[i][3]);
+
+      // Read sensor value
+      int sens = analogRead(sensor);
+      sens = (sens > 4000) ? 1 : 0; // Active-low logic
+
+      sums += sens * i * 1000;
+      active += sens;
+    }
+  }
+
+  // Handle no line detected condition
+  if (active == 0) {
+    if (noLineStart == 0) {
+      noLineStart = millis(); // Start the timer
+    } else if (millis() - noLineStart >= 1000) {
+      return -1; // Return -1 if active == 0 for 1000ms
+    }
+  } else {
+    noLineStart = 0; // Reset the timer if line is detected
+  }
+
+  return (active > 0) ? sums / active : 6500; // Return position or default to center
+}
+
+
+void setMotorSpeeds(int leftSpeed, int rightSpeed) {
+  // Left motor
+  if (leftSpeed >= 0) {
+    digitalWrite(AIN1, HIGH);
+    digitalWrite(AIN2, LOW);
+  } else {
+    digitalWrite(AIN1, LOW);
+    digitalWrite(AIN2, HIGH);
+    leftSpeed = -leftSpeed; // Reverse direction and use absolute speed
+  }
+  analogWrite(PWMA, leftSpeed);
+
+  // Right motor
+  if (rightSpeed >= 0) {
+    digitalWrite(BIN1, HIGH);
+    digitalWrite(BIN2, LOW);
+  } else {
+    digitalWrite(BIN1, LOW);
+    digitalWrite(BIN2, HIGH);
+    rightSpeed = -rightSpeed; // Reverse direction and use absolute speed
+  }
+  analogWrite(PWMB, rightSpeed);
+}
