@@ -1,4 +1,12 @@
-#include <Arduino.h>
+#include <WiFi.h>
+
+// Wi-Fi credentials
+const char* ssid = "BakchodiBoys_2.4G";
+const char* password = "meteor1234";
+
+// TCP server
+WiFiServer server(12345);
+WiFiClient client;
 
 // Channel addresses for the 14 sensors
 byte channel_adress_table[14][4] = {
@@ -15,7 +23,7 @@ byte channel_adress_table[14][4] = {
 #define D 19
 #define sensor 34
 
-// Motor driver pins (TB12FNG)
+// Motor driver pins
 #define PWMA 32   // Left motor PWM
 #define PWMB 13   // Right motor PWM
 #define AIN1 25   // Left motor direction
@@ -37,6 +45,8 @@ const float integralLimit = 1000.0; // Anti-windup limit for the integral term
 // Base motor speed
 int baseSpeed = 120;
 
+bool motorsEnabled = false; // Track if motors are enabled
+
 void setup() {
   Serial.begin(115200); // Initialize serial communication for debugging
   Serial.println("System initialized.");
@@ -57,29 +67,55 @@ void setup() {
   pinMode(BIN2, OUTPUT);
   pinMode(STBY, OUTPUT);
 
-  // Enable motor driver
-  digitalWrite(STBY, HIGH);
-}
+  // Enable motor driver initially
+  digitalWrite(STBY, LOW);
 
+  // Connect to Wi-Fi
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("Connected to Wi-Fi");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+
+  // Start the TCP server
+  server.begin();
+}
 void loop() {
+  // Check for new client connections
+  if (!client || !client.connected()) {
+    client = server.available(); // Accept new client
+    if (client) {
+      Serial.println("New client connected.");
+      client.println("Welcome to ESP32! Type your commands.");
+    }
+  }
+
+  // Handle incoming TCP commands
+  if (client && client.connected() && client.available()) {
+    String command = client.readStringUntil('\n');
+    command.trim();
+    Serial.println("Command received: " + command);
+    handleTCPCommand(command);
+  }
+
   // Line following logic
   int position = readLine();
 
-  if (position == -1) { // No sensors detected a line
+  if (position == -1 || position == -2) { // No sensors detected a line
     setMotorSpeeds(0, 0); // Stop the motors
-    return;
-  } else if (position == -2) { // All sensors are over 4000
-    setMotorSpeeds(0, 0);
     return;
   }
 
   int error = position - 6500; // Center the line position (6500 is the mid-point)
-  error = map(error, -6500, 6500,-255,255);
+  error = map(error, -6500, 6500, -255, 255);
 
   // Compute PID values
   float proportional = error;
   integral += error;
-  
+
   // Anti-windup: Clamp integral to prevent excessive growth
   integral = constrain(integral, -integralLimit, integralLimit);
 
@@ -94,7 +130,35 @@ void loop() {
   // Set motor speeds, including reversing if needed
   setMotorSpeeds(leftSpeed, rightSpeed);
 
-  delay(10);
+  delay(10); // Adjust delay as needed
+}
+
+
+void handleTCPCommand(String command) {
+  if (command.startsWith("p")) {
+    Kp = command.substring(1).toFloat();
+    client.println("Kp updated to: " + String(Kp));
+  } else if (command.startsWith("i")) {
+    Ki = command.substring(1).toFloat();
+    client.println("Ki updated to: " + String(Ki));
+  } else if (command.startsWith("d")) {
+    Kd = command.substring(1).toFloat();
+    client.println("Kd updated to: " + String(Kd));
+  } else if (command.startsWith("s")) {
+    baseSpeed = command.substring(1).toInt();
+    client.println("Base speed updated to: " + String(baseSpeed));
+  } else if (command == "f") {
+    motorsEnabled = !motorsEnabled;
+    if (motorsEnabled) {
+      digitalWrite(STBY, HIGH);  // Enable motor driver
+      client.println("Motors enabled");
+    } else {
+      digitalWrite(STBY, LOW);   // Disable motor driver
+      client.println("Motors disabled");
+    }
+  } else {
+    client.println("Invalid command");
+  }
 }
 
 int readLine() {
