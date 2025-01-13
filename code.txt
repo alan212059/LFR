@@ -33,9 +33,9 @@ byte channel_adress_table[14][4] = {
 #define STBY 26   // Motor driver standby
 
 // PID constants
-double Kp = 3;   // Proportional gain
+double Kp = 1;   // Proportional gain
 double Ki = 0;   // Integral gain
-double Kd = 1;   // Derivative gain
+double Kd = 0;   // Derivative gain
 
 // PID variables
 float lastError = 0;
@@ -43,7 +43,7 @@ float integral = 0;
 const float integralLimit = 1000.0; // Anti-windup limit for the integral term
 
 // Base motor speed
-int baseSpeed = 120;
+int baseSpeed = 200;
 
 bool motorsEnabled = false; // Track if motors are enabled
 
@@ -126,6 +126,9 @@ void loop() {
   // Adjust motor speeds
   int leftSpeed = baseSpeed + correction;
   int rightSpeed = baseSpeed - correction;
+
+  leftSpeed = constrain(leftSpeed, -250, 250); // Adjust max value if needed
+  rightSpeed = constrain(rightSpeed, -250, 250);
 
   // Set motor speeds, including reversing if needed
   setMotorSpeeds(leftSpeed, rightSpeed);
