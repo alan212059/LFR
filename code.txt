@@ -171,7 +171,7 @@ int readLine() {
   int over4000Count = 0;
 
   // Center sensor indices for prioritization
-  const int centerStart = 5; // Assuming 5 to 8 are the center sensors
+  const int centerStart = 7; // Assuming 7 to 8 are the center sensors
   const int centerEnd = 8;
 
   for (int i = 0; i < 14; i++) {
