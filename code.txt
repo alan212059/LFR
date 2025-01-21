@@ -2,7 +2,7 @@
 #include "BluetoothSerial.h" // Include Bluetooth Serial library
 
 BluetoothSerial BTSerial; // Create Bluetooth Serial object
-
+float sensorWeights[14] = { 0.8, 0.85, 0.9, 0.9, 0.9, 0.95, 1.0, 1.0, 0.95, 0.9, 0.9, 0.9, 0.85, 0.8 };
 // Channel addresses for the 14 sensors
 byte channel_adress_table[14][4] = {
   { 0, 0, 0, 0 },  { 0, 0, 0, 1 },  { 0, 0, 1, 0 },  { 0, 0, 1, 1 },
@@ -28,9 +28,9 @@ byte channel_adress_table[14][4] = {
 #define STBY 26   // Motor driver standby
 
 // PID constants
-double Kp = 1.7;   // Proportional gain
+double Kp = 3;   // Proportional gain
 double Ki = 0;   // Integral gain
-double Kd = 0;   // Derivative gain
+double Kd = 5;   // Derivative gain
 
 // PID variables
 float lastError = 0;
@@ -38,7 +38,7 @@ float integral = 0;
 const float integralLimit = 1000.0; // Anti-windup limit for the integral term
 
 // Base motor speed
-int baseSpeed = 200;
+int baseSpeed = 225;
 
 bool motorsEnabled = true; // Track if motors are enabled
 
@@ -108,8 +108,8 @@ void loop() {
   int leftSpeed = baseSpeed + correction;
   int rightSpeed = baseSpeed - correction;
 
-  leftSpeed = constrain(leftSpeed, -250, 250); // Adjust max value if needed
-  rightSpeed = constrain(rightSpeed, -250, 250);
+  leftSpeed = constrain(leftSpeed, -255, 255); // Adjust max value if needed
+  rightSpeed = constrain(rightSpeed, -255, 255);
 
   // Set motor speeds, including reversing if needed
   setMotorSpeeds(leftSpeed, rightSpeed);
@@ -117,9 +117,12 @@ void loop() {
   delay(10); // Adjust delay as needed
 }
 
+// Add weights for each sensor
+
+
 int readLine() {
   static unsigned long noLineStart = 0; // Track when no line was first detected
-  int sums = 0;
+  float sums = 0; // Use float to accommodate weighted values
   int active = 0;
   int overThresholdCount = 0;
 
@@ -138,48 +141,49 @@ int readLine() {
     sens = (sens > thresholdValue) ? 1 : 0; // Active-low logic
 
     // Weighted sum calculation
-    sums += sens * i * 1000;
+    sums += sens * i * 1000 * sensorWeights[i]; // Apply weight to the sensor index
     active += sens;
   }
 
   // Handle no line detected condition
-  if(overThresholdCount > 5)
-  return -2;
+  if (overThresholdCount > 8)
+    return -2;
 
   if (overThresholdCount > 2) {
-    // sums = 0;
-    // active = 0;
-    // int centerStart = 7;
-    // int centerEnd = 8;
+    sums = 0;
+    active = 0;
+    int centerStart = 6;
+    int centerEnd = 7;
 
-    // for (int i = centerStart; i <= centerEnd; i++) {
-    //   // Set MUX channel address
-    //   digitalWrite(D, channel_adress_table[i][0]);
-    //   digitalWrite(C, channel_adress_table[i][1]);
-    //   digitalWrite(B, channel_adress_table[i][2]);
-    //   digitalWrite(A, channel_adress_table[i][3]);
+    for (int i = centerStart; i <= centerEnd; i++) {
+      // Set MUX channel address
+      digitalWrite(D, channel_adress_table[i][0]);
+      digitalWrite(C, channel_adress_table[i][1]);
+      digitalWrite(B, channel_adress_table[i][2]);
+      digitalWrite(A, channel_adress_table[i][3]);
 
-    //   // Read sensor value
-    //   int sens = analogRead(sensor);
-    //   sens = (sens > thresholdValue) ? 1 : 0; // Active-low logic
+      // Read sensor value
+      int sens = analogRead(sensor);
+      sens = (sens > thresholdValue) ? 1 : 0; // Active-low logic
 
-    //   sums += sens * i * 1000;
-    //   active += sens;
-    // }
-    return -3;
+      sums += sens * i * 1000 * sensorWeights[i]; // Apply weight to the sensor index
+      active += sens;
+    }
   }
+
   if (active == 0) {
     if (noLineStart == 0) {
       noLineStart = millis(); // Start the timer
     } else if (millis() - noLineStart >= 500) {
-      return -1; // Return -1 if active == 0 for 1000ms
+      return -1; // Return -1 if active == 0 for 500ms
     }
   } else {
     noLineStart = 0; // Reset the timer if line is detected
   }
 
-  return (active > 0) ? sums / active : 6500; // Return position or default to center
+  return (active > 0) ? sums / active : 6500; // Return weighted position or default to center
 }
+
 
 void setMotorSpeeds(int leftSpeed, int rightSpeed) {
   // Left motor
