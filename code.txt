@@ -21,7 +21,7 @@ byte channel_adress_table[14][4] = {
 #define B 22
 #define C 21
 #define D 19
-#define sensor 34
+#define sensor 4
 
 // Motor driver pins
 #define PWMA 32   // Left motor PWM
