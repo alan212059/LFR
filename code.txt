@@ -25,7 +25,7 @@ byte channel_adress_table[14][4] = {
 
 // Motor driver pins
 #define PWMA 32   // Left motor PWM
-#define PWMB 13   // Right motor PWM
+#define PWMB 12   // Right motor PWM
 #define AIN1 25   // Left motor direction
 #define AIN2 33   // Left motor direction
 #define BIN1 14   // Right motor direction
@@ -33,9 +33,9 @@ byte channel_adress_table[14][4] = {
 #define STBY 26   // Motor driver standby
 
 // PID constants
-double Kp = 1;   // Proportional gain
+double Kp = 3;   // Proportional gain
 double Ki = 0;   // Integral gain
-double Kd = 0;   // Derivative gain
+double Kd = 10;   // Derivative gain
 
 // PID variables
 float lastError = 0;
@@ -45,7 +45,7 @@ const float integralLimit = 1000.0; // Anti-windup limit for the integral term
 // Base motor speed
 int baseSpeed = 200;
 
-bool motorsEnabled = false; // Track if motors are enabled
+bool motorsEnabled = true; // Track if motors are enabled
 
 void setup() {
   Serial.begin(115200); // Initialize serial communication for debugging
@@ -68,7 +68,7 @@ void setup() {
   pinMode(STBY, OUTPUT);
 
   // Enable motor driver initially
-  digitalWrite(STBY, LOW);
+  digitalWrite(STBY, HIGH);
 
   // Connect to Wi-Fi
   WiFi.begin(ssid, password);
