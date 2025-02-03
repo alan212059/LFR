@@ -2,151 +2,160 @@
 #include "BluetoothSerial.h" // Include Bluetooth Serial library
 
 BluetoothSerial BTSerial; // Create Bluetooth Serial object
-float sensorWeights[14] = { 0.8, 0.85, 0.9, 0.9, 0.9, 0.95, 1.0, 1.0, 0.95, 0.9, 0.9, 0.9, 0.85, 0.8 };
-// Channel addresses for the 14 sensors
+
+int t = 4095;
+
+
 byte channel_adress_table[14][4] = {
-  { 0, 0, 0, 0 },  { 0, 0, 0, 1 },  { 0, 0, 1, 0 },  { 0, 0, 1, 1 },
-  { 0, 1, 0, 0 },  { 0, 1, 0, 1 },  { 0, 1, 1, 0 },  { 0, 1, 1, 1 },
-  { 1, 0, 0, 0 },  { 1, 0, 0, 1 },  { 1, 0, 1, 0 },  { 1, 0, 1, 1 },
-  { 1, 1, 0, 0 },  { 1, 1, 0, 1 }
+  { 0, 0, 0, 0 }, { 0, 0, 0, 1 }, { 0, 0, 1, 0 }, { 0, 0, 1, 1 },
+  { 0, 1, 0, 0 }, { 0, 1, 0, 1 }, { 0, 1, 1, 0 }, { 0, 1, 1, 1 },
+  { 1, 0, 0, 0 }, { 1, 0, 0, 1 }, { 1, 0, 1, 0 }, { 1, 0, 1, 1 },
+  { 1, 1, 0, 0 }, { 1, 1, 0, 1 }
 };
+
+// #define BUTTON_PIN 12  // Button connected to GPIO 12
+
+// bool buttonFlag = false;  
+// bool isCalibrated = false;  // Flag to ensure calibration happens first
+
+// void IRAM_ATTR handleButtonPress() {
+//     if (isCalibrated) {  
+//         buttonFlag = true;  // Allow movement only after calibration
+//     }
+// }
+
+// Sensor variables
+int max_values[14] = {0};
+int min_values[14] = {4095};  // Initialize with max possible value
+int threshold[14] = {0};
 
 // MUX variables
 #define A 23
 #define B 22
 #define C 21
 #define D 19
-#define sensor 4
+#define sensor 34
 
 // Motor driver pins
-#define PWMA 32   // Left motor PWM
-#define PWMB 12   // Right motor PWM
-#define AIN1 25   // Left motor direction
-#define AIN2 33   // Left motor direction
-#define BIN1 27   // Right motor direction
-#define BIN2 14   // Right motor direction
-#define STBY 26   // Motor driver standby
+#define PWMA 32   
+#define PWMB 12   
+#define AIN1 33  
+#define AIN2 25  
+#define BIN1 14   
+#define BIN2 27   
+#define STBY 26   
 
 // PID constants
-double Kp = 3;   // Proportional gain
-double Ki = 0;   // Integral gain
-double Kd = 5;   // Derivative gain
+double Kp = 5.65, Ki = 0, Kd = 56.5;
 
 // PID variables
-float lastError = 0;
-float integral = 0;
-const float integralLimit = 1000.0; // Anti-windup limit for the integral term
+float lastError = 0, integral = 0;
+const float integralLimit = 1000.0; 
 
 // Base motor speed
-int baseSpeed = 225;
-
-bool motorsEnabled = true; // Track if motors are enabled
-
-// Sensor threshold value
-int thresholdValue = 3500;
+int baseSpeed = 200;
 
 void setup() {
-  Serial.begin(115200); // Initialize serial communication for debugging
-  BTSerial.begin("ESP32_PID_Controller"); // Start Bluetooth SPP with a device name
-  Serial.println("Bluetooth initialized. Connect to 'ESP32_PID_Controller'.");
+    Serial.begin(115200);
+    BTSerial.begin("ESP32_PID_Controller"); 
+    Serial.println("Bluetooth initialized. Connect to 'ESP32_PID_Controller'.");
 
-  // Set up MUX pins
-  pinMode(A, OUTPUT);
-  pinMode(B, OUTPUT);
-  pinMode(C, OUTPUT);
-  pinMode(D, OUTPUT);
-  pinMode(sensor, INPUT);
+    // Set up MUX pins
+    pinMode(A, OUTPUT);
+    pinMode(B, OUTPUT);
+    pinMode(C, OUTPUT);
+    pinMode(D, OUTPUT);
+    pinMode(sensor, INPUT);
 
-  // Set up motor driver pins
-  pinMode(PWMA, OUTPUT);
-  pinMode(PWMB, OUTPUT);
-  pinMode(AIN1, OUTPUT);
-  pinMode(AIN2, OUTPUT);
-  pinMode(BIN1, OUTPUT);
-  pinMode(BIN2, OUTPUT);
-  pinMode(STBY, OUTPUT);
+    // Set up motor driver pins
+    pinMode(PWMA, OUTPUT);
+    pinMode(PWMB, OUTPUT);
+    pinMode(AIN1, OUTPUT);
+    pinMode(AIN2, OUTPUT);
+    pinMode(BIN1, OUTPUT);
+    pinMode(BIN2, OUTPUT);
+    pinMode(STBY, OUTPUT);
 
-  // Enable motor driver initially
-  digitalWrite(STBY, HIGH);
+    // Enable motor driver initially
+    digitalWrite(STBY, HIGH);
+
+    // Start Calibration
+    setMotorSpeeds(150, -150);  
+    for (int i = 0; i < 3000; ++i) {
+        calibrate();
+    }
+    // Compute sensor thresholds
+    for (int i = 0; i < 14; ++i) {
+        t = min(t, max_values[i]);
+    }
+
+    t -=100;
+
+    setMotorSpeeds(0, 0);
+    delay(2000);
+    // isCalibrated = true;  // Mark calibration as complete
+
+    // pinMode(BUTTON_PIN, INPUT_PULLDOWN);  
+    // attachInterrupt(BUTTON_PIN, handleButtonPress, RISING);
 }
 
 void loop() {
-  // Handle Bluetooth commands
-  if (BTSerial.available()) {
-    String command = BTSerial.readStringUntil('\n');
-    processBluetoothCommand(command);
-  }
+    // Handle Bluetooth commands
+    if (BTSerial.available()) {
+        String command = BTSerial.readStringUntil('\n');
+        processBluetoothCommand(command);
+    }
 
-  // Line following logic
-  int position = readLine();
+    // if (!isCalibrated) return;  // Ensure calibration is done before proceeding
 
-  if (position == -1 || position == -2) { // No sensors detected a line
-    setMotorSpeeds(0, 0); // Stop the motors
-    return;
-  }
-  if(position == -3)
-  {
-    setMotorSpeeds(250, 250);
-    delay(50);
-  }
+    // if (buttonFlag) {  
+    //     Serial.println("Button Pressed! Starting LFR...");
+    //     buttonFlag = false;  // Reset flag after detecting press
+    // } else {
+    //     return;  // Do nothing until button is pressed
+    // }
 
-  int error = position - 6500; // Center the line position (6500 is the mid-point)
-  error = map(error, -6500, 6500, -255, 255);
+    // Line following logic
+    int position = readLine();
 
-  // Compute PID values
-  float proportional = error;
-  integral += error;
+    if (position == -1 || position == -2) { 
+        setMotorSpeeds(0, 0); 
+        return;
+    }
 
-  // Anti-windup: Clamp integral to prevent excessive growth
-  integral = constrain(integral, -integralLimit, integralLimit);
+    int error = position - 6500;
+    error = map(error, -6500, 6500, -255, 255);
 
-  float derivative = error - lastError;
-  float correction = (Kp * proportional) + (Ki * integral) + (Kd * derivative);
-  lastError = error;
+    float proportional = error;
+    integral += error;
+    integral = constrain(integral, -integralLimit, integralLimit);
+    float derivative = error - lastError;
+    float correction = (Kp * proportional) + (Ki * integral) + (Kd * derivative);
+    lastError = error;
 
-  // Adjust motor speeds
-  int leftSpeed = baseSpeed + correction;
-  int rightSpeed = baseSpeed - correction;
+    int leftSpeed = constrain(baseSpeed + correction, -225, 225);
+    int rightSpeed = constrain(baseSpeed - correction, -225, 225);
 
-  leftSpeed = constrain(leftSpeed, -255, 255); // Adjust max value if needed
-  rightSpeed = constrain(rightSpeed, -255, 255);
-
-  // Set motor speeds, including reversing if needed
-  setMotorSpeeds(leftSpeed, rightSpeed);
-
-  delay(10); // Adjust delay as needed
+    setMotorSpeeds(leftSpeed, rightSpeed);
 }
 
-// Add weights for each sensor
-
-
 int readLine() {
-  static unsigned long noLineStart = 0; // Track when no line was first detected
-  float sums = 0; // Use float to accommodate weighted values
-  int active = 0;
-  int overThresholdCount = 0;
+   static unsigned long noLineStart = 0;
+    float sums = 0;
+    int active = 0;
+    int overThresholdCount = 0;
 
-  for (int i = 0; i < 14; i++) {
-    // Set MUX channel address
-    digitalWrite(D, channel_adress_table[i][0]);
-    digitalWrite(C, channel_adress_table[i][1]);
-    digitalWrite(B, channel_adress_table[i][2]);
-    digitalWrite(A, channel_adress_table[i][3]);
-
-    // Read sensor value
-    int sens = analogRead(sensor);
-    if (sens > thresholdValue) {
-      overThresholdCount++; // Count sensors with values over thresholdValue
+    for (int i = 0; i < 14; i++) {
+        Mux_Addr(i);
+        int sens = analogRead(sensor);
+        if (sens > t) overThresholdCount++;
+        sens = (sens > t) ? 1 : 0;
+        sums += sens * i * 1000 ;
+        active += sens;
     }
-    sens = (sens > thresholdValue) ? 1 : 0; // Active-low logic
 
-    // Weighted sum calculation
-    sums += sens * i * 1000 * sensorWeights[i]; // Apply weight to the sensor index
-    active += sens;
-  }
-
-  // Handle no line detected condition
-  if (overThresholdCount > 8)
+      // Handle no line detected condition
+  if (overThresholdCount > 12)
     return -2;
 
   if (overThresholdCount > 2) {
@@ -164,63 +173,64 @@ int readLine() {
 
       // Read sensor value
       int sens = analogRead(sensor);
-      sens = (sens > thresholdValue) ? 1 : 0; // Active-low logic
+      sens = (sens > t) ? 1 : 0; // Active-low logic
 
-      sums += sens * i * 1000 * sensorWeights[i]; // Apply weight to the sensor index
+      sums += sens * i * 1000  ;// Apply weight to the sensor index
       active += sens;
     }
   }
 
-  if (active == 0) {
+    if (active == 0) {
     if (noLineStart == 0) {
       noLineStart = millis(); // Start the timer
-    } else if (millis() - noLineStart >= 500) {
+    } else if (millis() - noLineStart >= 150) {
       return -1; // Return -1 if active == 0 for 500ms
     }
   } else {
     noLineStart = 0; // Reset the timer if line is detected
   }
 
-  return (active > 0) ? sums / active : 6500; // Return weighted position or default to center
+  return (active > 0) ? sums / active : 6500; // Return weighted position or default to centerS
 }
 
-
 void setMotorSpeeds(int leftSpeed, int rightSpeed) {
-  // Left motor
-  if (leftSpeed >= 0) {
-    digitalWrite(AIN1, HIGH);
-    digitalWrite(AIN2, LOW);
-  } else {
-    digitalWrite(AIN1, LOW);
-    digitalWrite(AIN2, HIGH);
-    leftSpeed = -leftSpeed; // Reverse direction and use absolute speed
-  }
-  analogWrite(PWMA, leftSpeed);
+    digitalWrite(AIN1, leftSpeed >= 0);
+    digitalWrite(AIN2, leftSpeed < 0);
+    analogWrite(PWMA, abs(leftSpeed));
 
-  // Right motor
-  if (rightSpeed >= 0) {
-    digitalWrite(BIN1, HIGH);
-    digitalWrite(BIN2, LOW);
-  } else {
-    digitalWrite(BIN1, LOW);
-    digitalWrite(BIN2, HIGH);
-    rightSpeed = -rightSpeed; // Reverse direction and use absolute speed
-  }
-  analogWrite(PWMB, rightSpeed);
+    digitalWrite(BIN1, rightSpeed >= 0);
+    digitalWrite(BIN2, rightSpeed < 0);
+    analogWrite(PWMB, abs(rightSpeed));
 }
 
 void processBluetoothCommand(String command) {
-  command.trim(); // Remove any trailing or leading whitespace
-  if (command.startsWith("Kp=")) {
-    Kp = command.substring(3).toFloat();
-    BTSerial.printf("Updated Kp to %.2f\n", Kp);
-  } else if (command.startsWith("Ki=")) {
-    Ki = command.substring(3).toFloat();
-    BTSerial.printf("Updated Ki to %.2f\n", Ki);
-  } else if (command.startsWith("Kd=")) {
-    Kd = command.substring(3).toFloat();
-    BTSerial.printf("Updated Kd to %.2f\n", Kd);
-  } else {
-    BTSerial.println("Invalid command. Use Kp=, Ki=, or Kd=");
-  }
+    command.trim();
+    if (command.startsWith("Kp=")) {
+        Kp = command.substring(3).toFloat();
+        BTSerial.printf("Updated Kp to %.2f\n", Kp);
+    } else if (command.startsWith("Ki=")) {
+        Ki = command.substring(3).toFloat();
+        BTSerial.printf("Updated Ki to %.2f\n", Ki);
+    } else if (command.startsWith("Kd=")) {
+        Kd = command.substring(3).toFloat();
+        BTSerial.printf("Updated Kd to %.2f\n", Kd);
+    } else {
+        BTSerial.println("Invalid command. Use Kp=, Ki=, or Kd=");
+    }
+}
+
+void Mux_Addr(unsigned int ch_Addr) {
+    digitalWrite(D, channel_adress_table[ch_Addr][0]);
+    digitalWrite(C, channel_adress_table[ch_Addr][1]);
+    digitalWrite(B, channel_adress_table[ch_Addr][2]);
+    digitalWrite(A, channel_adress_table[ch_Addr][3]);
+}
+
+void calibrate() {
+    for (int i = 0; i < 14; i++) {
+        Mux_Addr(i);
+        int val = analogRead(sensor);
+        if (val < min_values[i]) min_values[i] = val;
+        if (val > max_values[i]) max_values[i] = val;
+    }
 }
